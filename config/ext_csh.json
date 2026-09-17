@@ -1,0 +1,50 @@
+{
+  "sid": "dgx-h200-1",
+  "portal_urls": [
+    "http://127.0.0.1:5000"
+  ],
+  "env_file": "/home/ext_csh/MPI_sweep/logs/beyondg/portal.env",
+  "reload_remaining_h": 6.5,
+  "request_retry_s": 60,
+  "ssh": {
+    "host": "127.0.0.1",
+    "user": "ext_csh",
+    "key": "/home/ext_csh/.ssh/gpubox_host",
+    "known_hosts": "/home/ext_csh/.ssh/gpubox_known_hosts",
+    "python": "python3"
+  },
+  "worker": {
+    "state_dir": "/home/ext_csh/MPI_sweep/logs/beyondg",
+    "start_retry_s": 30,
+    "process_patterns": [
+      "*/train_td3bc.py",
+      "train_td3bc.py",
+      "*/launch_mpi_sweep.py",
+      "launch_mpi_sweep.py"
+    ],
+    "cpu": {
+      "command": [
+        "bash",
+        "/home/ext_csh/MPI_sweep/logs/mpi_tau40_ext/run_queue_imp_me_k14_s0123_cpu.sh"
+      ],
+      "cwd": "/home/ext_csh/MPI_sweep",
+      "log": "/home/ext_csh/MPI_sweep/logs/beyondg/queue_cpu.log",
+      "queue_patterns": [
+        "*/run_queue_imp_me_k14_s0123_cpu.sh",
+        "run_queue_imp_me_k14_s0123_cpu.sh"
+      ]
+    },
+    "gpu": {
+      "command": [
+        "bash",
+        "/home/ext_csh/MPI_sweep/logs/mpi_tau40_ext/run_queue_imp_me_k14_s0123_gpu.sh"
+      ],
+      "cwd": "/home/ext_csh/MPI_sweep",
+      "log": "/home/ext_csh/MPI_sweep/logs/beyondg/queue_gpu.log",
+      "queue_patterns": [
+        "*/run_queue_imp_me_k14_s0123_gpu.sh",
+        "run_queue_imp_me_k14_s0123_gpu.sh"
+      ]
+    }
+  }
+}

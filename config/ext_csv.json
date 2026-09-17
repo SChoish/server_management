@@ -1,0 +1,50 @@
+{
+  "sid": "dgx-h200-2",
+  "portal_urls": [
+    "http://127.0.0.1:5000",
+    "http://166.104.28.71:5000"
+  ],
+  "env_file": "/home/ext_csv/MPI_sweep/logs/beyondg/portal.env",
+  "reload_remaining_h": 6.5,
+  "request_retry_s": 60,
+  "ssh": {
+    "host": "166.104.28.73",
+    "user": "ext_csv",
+    "key": "/home/ext_csv/.ssh/gpubox_host",
+    "known_hosts": "/home/ext_csv/.ssh/gpubox_known_hosts",
+    "python": "python3"
+  },
+  "worker": {
+    "state_dir": "/home/ext_csv/MPI_sweep/logs/beyondg",
+    "start_retry_s": 30,
+    "process_patterns": [
+      "*/AMO-fql/train.py",
+      "*/launch_fql_amo_jax_loco9_tinit5_alrgrid.py",
+      "launch_fql_amo_jax_loco9_tinit5_alrgrid.py"
+    ],
+    "cpu": {
+      "command": [
+        "bash",
+        "${REPO}/scripts/hosts/beyondg/run_queue_amo_fql_jax_loco9_cpu.sh"
+      ],
+      "cwd": "/home/ext_csv/MPI_sweep",
+      "log": "/home/ext_csv/MPI_sweep/logs/beyondg/queue_cpu.log",
+      "queue_patterns": [
+        "*/run_queue_amo_fql_jax_loco9_cpu.sh",
+        "run_queue_amo_fql_jax_loco9_cpu.sh"
+      ]
+    },
+    "gpu": {
+      "command": [
+        "bash",
+        "${REPO}/scripts/hosts/beyondg/run_queue_amo_fql_jax_loco9_gpu.sh"
+      ],
+      "cwd": "/home/ext_csv/MPI_sweep",
+      "log": "/home/ext_csv/MPI_sweep/logs/beyondg/queue_gpu.log",
+      "queue_patterns": [
+        "*/run_queue_amo_fql_jax_loco9_gpu.sh",
+        "run_queue_amo_fql_jax_loco9_gpu.sh"
+      ]
+    }
+  }
+}

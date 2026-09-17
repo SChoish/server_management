@@ -1,35 +1,30 @@
 #!/usr/bin/env bash
-# Keep the Beyond-G lease watcher alive. Portal retry is inside the watcher.
+# One supervisor and one controller per profile, including across checkouts.
 set -uo pipefail
-ROOT=/home/ext_csh/MPI_sweep
-PY=/home/ext_csh/miniconda3/envs/capo_jax/bin/python
-WATCH="$ROOT/scripts/hosts/beyondg/watch_beyondg_lease.py"
-LOG="$ROOT/logs/beyondg/lease.watch.log"
-PIDFILE="$ROOT/logs/beyondg/lease.watch.pid"
-GUARD="$ROOT/logs/beyondg/ensure.pid"
-
-mkdir -p "$ROOT/logs/beyondg"
-echo $$ >"$GUARD"
-
-alive() {
-  local pid cmd
-  pid=$(cat "$PIDFILE" 2>/dev/null || true)
-  if [[ -n "${pid:-}" && -r "/proc/${pid}/cmdline" ]]; then
-    cmd=$(tr '\0' ' ' <"/proc/${pid}/cmdline")
-    [[ "$cmd" == *watch_beyondg_lease.py* ]] && return 0
+umask 077
+HERE="$(cd "$(dirname "$0")" && pwd)"
+PY="${PYTHON:-python3}"
+WATCH="$HERE/watch_beyondg_lease.py"
+STATE="$("$PY" "$WATCH" --print-state-dir "$@")" || exit 1
+mkdir -p "$STATE"
+exec 9>"$STATE/ensure.lock"
+flock -n 9 || exit 0
+echo $$ >"$STATE/ensure.pid"
+child=""
+cleanup() {
+  trap - TERM INT
+  if [[ -n "$child" ]]; then
+    kill -TERM "$child" 2>/dev/null || true
+    wait "$child" 2>/dev/null || true
   fi
-  pgrep -f 'miniconda3/.*/python -u .*/watch_beyondg_lease.py --watch' >/dev/null
+  rm -f "$STATE/ensure.pid"
+  exit 0
 }
-
-start_watch() {
-  nohup "$PY" -u "$WATCH" --watch --apply --interval 60 >>"$LOG" 2>&1 &
-  echo $! >"$ROOT/logs/beyondg/lease.watch.nohup.pid"
-}
-
+trap cleanup TERM INT
 while true; do
-  if ! alive; then
-    echo "[ensure] restart watcher $(date -Is)" >>"$LOG"
-    start_watch
-  fi
-  sleep 60
+  "$PY" -u "$WATCH" --watch --apply "$@" 9>&- &
+  child=$!
+  wait "$child" || true
+  child=""
+  sleep 5
 done
