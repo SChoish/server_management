@@ -46,6 +46,7 @@ cd ~/server_management
 이미 checkout이 있으면:
 
 ```bash
+git remote set-branches origin '*'
 git fetch origin
 git switch main
 git pull --ff-only origin main
