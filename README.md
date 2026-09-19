@@ -9,7 +9,7 @@
 | 처음 포털 대기열에 있음 | 할당될 때까지 확인. CPU는 새로 시작하지 않음 |
 | GPU 할당 + 도커 SSH 정상 + GPU 확인 | 기존 GPU 큐 재개 |
 | 포털 잔여 시간 ≤ 6.5시간 | 학습을 먼저 종료하지 않고 `/container/<설정한 sid>/start`로 리로드 |
-| 사용하던 GPU가 회수됨 | CPU 큐 재개. 포털이 stopped이면 GPU 요청, queued이면 그대로 대기 |
+| 사용하던 GPU가 회수됨 | CPU 큐 재개. 포털 쿨다운이 없으면 같은 주기에 GPU 요청, 쿨다운 중에는 대기, queued이면 재제출하지 않음 |
 | CPU 실행 중 GPU 재할당 | 도커/GPU 확인 → CPU 런처·학습 프로세스 SIGTERM → 모두 종료 확인 → GPU 큐 재개 |
 | 포털 장애 또는 SSH 실패만 발생 | 회수로 단정하지 않음. 이미 실행 중인 작업을 유지하며 재확인 |
 
@@ -17,12 +17,14 @@
 
 리로드 실패 시에도 정상 GPU 작업을 유지합니다. 실패 요청은 기본 60초 후 재시도하며, 새 잔여 시간 또는 대기열 진입을 확인해야 리로드 성공으로 기록합니다. CPU 종료가 늦어져도 강제 SIGKILL하거나 GPU를 겹쳐 실행하지 않습니다.
 
+포털의 `cooldown_min_left`가 양수인 동안에는 재시도 시간이 지나도 `/start`를 호출하지 않습니다. 회수 후 CPU 작업은 계속하며, 쿨다운이 0으로 바뀌면 이전 요청의 재시도 간격을 기다리지 않고 GPU를 요청합니다. 누락된 쿨다운 필드는 0으로 취급하고, 잘못된 값은 포털 상태 미확인으로 처리합니다.
+
 ## 서버 설정
 
 | 프로필 | 포털 서버 ID | 기존 큐 |
 | --- | --- | --- |
 | `ext_csh` | `dgx-h200-1` | `/home/ext_csh/MPI_sweep/logs/iql_gauss_fr_s0/run_queue_{cpu,gpu}.sh` |
-| `ext_csv` | `dgx-h200-2` | FQL JAX loco9 T-init-5, alpha LR 3e-4 / 1e-3 / 2e-3, seeds 0–3 |
+| `ext_csv` | `dgx-h200-2` | IQL deterministic W2, K=1/2/3, T 19개, seed 0 이후 seeds 1–3 |
 
 설정은 `config/ext_csh.json`, `config/ext_csv.json`입니다. 다른 실험으로 바꾸면 `worker.cpu/gpu.command`, `cwd`, `queue_patterns`, `process_patterns`를 함께 변경합니다. 명령은 셸 문자열 대신 argv 배열입니다. CPU와 GPU 큐는 **같은 체크포인트·결과 디렉터리**를 사용해야 합니다.
 
@@ -58,7 +60,15 @@ python3 ~/server_management/scripts/hosts/beyondg/register_queue.py \
 `lease.json`의 `queue_commands`가 워처가 실제 사용 중인 CPU/GPU 명령입니다.
 이전 워처의 `gpu_usage`, `gpu_queue_alive`처럼 갱신되지 않는 필드는 제거됩니다.
 `worker.ignore_patterns`에 등록한 결과 동기화 스크립트와 그 자식은 학습 작업으로
-세지 않습니다. ext_csh의 IQL 결과 갱신 루프는 큐 전환을 막거나 함께 종료되지 않습니다.
+세지 않습니다. ext_csh와 ext_csv의 IQL 결과 갱신 루프는 큐 전환을 막거나 함께 종료되지 않습니다. 이전 워처가 이미 학습 프로세스로 기록한 루프와 그 자식도 제외하므로, 학습 큐가 실패하고 동기화 루프만 남아 있으면 큐를 다시 시작할 수 있습니다.
+
+ext_csv는 이 저장소의 `run_queue_iql_qbc_det_w2_seed0_{cpu,gpu}.sh` 래퍼로 기존 MPI 큐를 호출합니다. 호스트와 컨테이너 양쪽에 아래 파일과 저장 디렉터리가 필요합니다.
+
+- 큐: `/home/ext_csv/MPI_sweep/scripts/hosts/beyondg/run_queue_iql_qbc_det_w2_seed0.sh`
+- 결과 동기화: `/home/ext_csv/MPI_sweep/scripts/refresh_iql_qbc_det_w2_5m.sh`
+- 공통 체크포인트: `/raid/ext_csv/MPI_store/iql_qbc_deterministic_w2_hscale_seed0`
+
+CPU/GPU 전환에서도 기존 큐·실험 조건·저장 경로를 유지합니다. `IQL_QBC_DET_DEVICE=cpu`를 사용하는 기존 CPU 큐도 식별합니다. 실험 실패 시 큐의 비정상 종료를 유지하며, 체크포인트에서 재시도합니다. 완료 결과를 지우거나 실패를 성공으로 바꾸지 않습니다.
 
 이 기능을 처음 설치할 때만 호스트에서 코드를 업데이트하고 재시작합니다.
 컨테이너에서 등록하려면 호스트와 같은 설정 파일이 마운트되어 있어야 합니다.

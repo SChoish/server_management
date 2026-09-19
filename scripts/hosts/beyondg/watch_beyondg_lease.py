@@ -97,8 +97,10 @@ def parse_status(payload, sid):
     if state not in KNOWN_STATES:
         raise PortalError(f"unknown_state:{state}")
     remaining = row.get("lease_hours_left")
+    cooldown = row.get("cooldown_min_left")
     try:
         remaining = float(remaining) if remaining is not None else None
+        cooldown = float(cooldown) if cooldown is not None else 0.0
         port = int(row["ssh_port"]) if row.get("ssh_port") else None
     except (ValueError, TypeError) as error:
         raise PortalError("invalid_status_fields") from error
@@ -106,8 +108,11 @@ def parse_status(payload, sid):
         raise PortalError("invalid_ssh_port")
     if remaining is not None and not math.isfinite(remaining):
         raise PortalError("invalid_remaining_time")
+    if not math.isfinite(cooldown) or cooldown < 0:
+        raise PortalError("invalid_cooldown")
     return {"sid": sid, "state": state, "remaining_h": remaining,
-            "host": row.get("host"), "ssh_port": port}
+            "host": row.get("host"), "ssh_port": port,
+            "cooldown_min_left": cooldown}
 
 
 class Portal:
@@ -238,7 +243,7 @@ class Controller:
         # watchers (gpu_usage/gpu_queue_alive/etc. are never refreshed here).
         keys = {"gpu_seen", "allocation_token", "portal_state", "remaining_h",
                 "loss_confirmed", "phase", "events", "ts", "ssh_port",
-                "last_request", "last_reload_success"}
+                "last_request", "last_reload_success", "cooldown_min_left"}
         self.state = {k: v for k, v in prior.items() if k in keys}
         # Honor evidence saved by either legacy watcher during migration.
         self.state.setdefault("gpu_seen", bool(prior.get("gpu_held")))
@@ -258,6 +263,7 @@ class Controller:
         self.state["portal_state"] = box["state"]
         self.state["remaining_h"] = box["remaining_h"]
         self.state["ssh_port"] = box["ssh_port"]
+        self.state["cooldown_min_left"] = box.get("cooldown_min_left") or 0.0
         box["allocation_token"] = self.state.get("allocation_token", "unknown")
 
     def set_phase(self, phase):
@@ -278,17 +284,27 @@ class Controller:
         except PortalError as error:
             self.event(f"portal_unknown:{error}")
             return self.set_phase("wait_portal")
+        previous_state = self.state.get("portal_state")
+        previous_cooldown = float(self.state.get("cooldown_min_left") or 0.0)
         self.observe(box)
         if not apply:
             return self.set_phase("observe_" + box["state"])
 
         # Renew in place: a failed HTTP request must not kill a healthy job.
+        cooldown = box.get("cooldown_min_left") or 0.0
+        retry_s = self.cfg.get("request_retry_s", 60)
         due = (box["state"] == "running" and box["remaining_h"] is not None
                and box["remaining_h"] <= self.cfg.get("reload_remaining_h", 6.5))
-        renew = (due and self.ready_for("last_reload_success", 30 * 60)
-                 and self.ready_for("last_request", self.cfg.get("request_retry_s", 60)))
-        acquire = (box["state"] in RELEASED
-                   and self.ready_for("last_request", self.cfg.get("request_retry_s", 60)))
+        # Portal cooldown takes precedence over our retry timer, including
+        # the first tick after loss. CPU failover still runs below while waiting.
+        if cooldown > 0 and (due or box["state"] in RELEASED):
+            self.event("waiting_portal_cooldown")
+        just_lost = previous_state == "running" and box["state"] in RELEASED
+        cooldown_cleared = previous_cooldown > 0 and cooldown <= 0
+        renew = (due and cooldown <= 0 and self.ready_for("last_reload_success", 30 * 60)
+                 and self.ready_for("last_request", retry_s))
+        acquire = (box["state"] in RELEASED and cooldown <= 0
+                   and (just_lost or cooldown_cleared or self.ready_for("last_request", retry_s)))
         if renew or acquire:
             self.state["last_request"] = self.clock()
             accepted = False

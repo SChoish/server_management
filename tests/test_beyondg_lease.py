@@ -21,9 +21,10 @@ from watch_beyondg_lease import (
 )
 
 
-def box(state='running', remaining=9.0):
+def box(state='running', remaining=9.0, cooldown=0.0):
     return {'sid':'dgx-h200-2', 'state':state, 'remaining_h':remaining,
-            'host':'127.0.0.1', 'ssh_port':23021 if state == 'running' else None}
+            'host':'127.0.0.1', 'ssh_port':23021 if state == 'running' else None,
+            'cooldown_min_left':cooldown}
 
 
 class FakePortal:
@@ -154,6 +155,62 @@ class Transitions(unittest.TestCase):
         self.assertEqual(self.portal.posts, 1, 'Do not resubmit an existing queue entry')
         self.assertTrue(self.workers.cpu)
 
+    def test_cooldown_blocks_retries_but_cpu_continues_until_clear(self):
+        self.tick()
+        self.workers.gpu = []
+        self.control.state['last_request'] = self.now - 10
+        self.portal.current = box('stopped', None, cooldown=10)
+        for elapsed in (0, 61, 61):
+            self.now += elapsed
+            result = self.tick()
+            self.assertEqual(self.portal.posts, 0)
+            self.assertEqual(result['phase'], 'cpu_waiting_gpu')
+            self.assertIn('waiting_portal_cooldown', result['events'])
+            self.assertTrue(self.workers.cpu)
+        # Even a recent saved request cannot delay the transition out of cooldown.
+        self.control.state['last_request'] = self.now - 5
+        self.portal.current = box('stopped', None, cooldown=0)
+        self.portal.after_post = box('queued', None)
+        result = self.tick()
+        self.assertEqual(self.portal.posts, 1)
+        self.assertEqual(result['portal_state'], 'queued')
+        self.assertIn('gpu_requested', result['events'])
+        self.tick()
+        self.assertEqual(self.portal.posts, 1)
+
+    def test_initial_cooldown_waits_without_starting_cpu(self):
+        self.portal.current = box('stopped', None, cooldown=3)
+        self.assertEqual(self.tick()['phase'], 'wait_gpu')
+        self.assertEqual(self.portal.posts, 0)
+        self.assertFalse(self.workers.cpu)
+
+    def test_cooldown_also_blocks_renewal_without_stopping_gpu(self):
+        self.portal.current = box(remaining=6.0, cooldown=2)
+        result = self.tick()
+        self.assertEqual(self.portal.posts, 0)
+        self.assertEqual(result['phase'], 'gpu_running')
+        self.assertFalse(any(call[1] == 'stop' for call in self.workers.calls))
+
+    def test_new_loss_requests_immediately_when_not_in_cooldown(self):
+        self.tick()
+        self.workers.gpu = []
+        self.control.state['last_request'] = self.now - 5
+        self.portal.current = box('stopped', None)
+        self.portal.after_post = box('queued', None)
+        result = self.tick()
+        self.assertEqual(self.portal.posts, 1)
+        self.assertEqual(result['phase'], 'cpu_waiting_gpu')
+
+    def test_cooldown_clear_after_restart_keeps_immediate_request(self):
+        prior = {'gpu_seen':True, 'portal_state':'stopped',
+                 'cooldown_min_left':1.0, 'last_request':self.now - 5}
+        self.control = Controller({}, self.portal, self.workers, prior,
+                                  clock=lambda:self.now)
+        self.portal.current = box('stopped', None, cooldown=0)
+        self.portal.after_post = box('queued', None)
+        self.tick()
+        self.assertEqual(self.portal.posts, 1)
+
     def test_cpu_shutdown_must_finish_before_gpu_start(self):
         self.control.state.update(gpu_seen=True, loss_confirmed=True)
         self.workers.cpu = ['cpu:1']
@@ -274,6 +331,16 @@ class PortalTests(unittest.TestCase):
             portal.start()
             request.assert_called_once_with('POST','/container/dgx-h200-2/start',{})
 
+    def test_cooldown_parsing_rejects_invalid_values(self):
+        row = {'state':'stopped', 'cooldown_min_left':'7.5'}
+        parsed = parse_status({'dgx-h200-2':row}, 'dgx-h200-2')
+        self.assertEqual(parsed['cooldown_min_left'], 7.5)
+        for value in (-1, 'bad', float('nan'), float('inf')):
+            with self.subTest(value=value), self.assertRaises(PortalError):
+                parse_status({'dgx-h200-2':{**row, 'cooldown_min_left':value}}, 'dgx-h200-2')
+        for row in ({'state':'stopped'}, {'state':'stopped', 'cooldown_min_left':None}):
+            self.assertEqual(parse_status({'dgx-h200-2':row}, 'dgx-h200-2')['cooldown_min_left'], 0.0)
+
     def test_checked_in_profiles_load_and_pin_distinct_servers(self):
         a, b = load_config('ext_csh'), load_config('ext_csv')
         self.assertEqual(a['sid'], 'dgx-h200-1')
@@ -304,7 +371,8 @@ class WorkerTests(unittest.TestCase):
     def test_cpu_flag_forms_and_environment(self):
         for args, env in ((['--device','cpu'],{}), (['--device=cpu'],{}),
                           (['--cpu-jobs','2'],{}), ([],{'JAX_PLATFORMS':'cpu'}),
-                          ([],{'CUDA_VISIBLE_DEVICES':''})):
+                          ([],{'CUDA_VISIBLE_DEVICES':''}),
+                          ([],{'IQL_QBC_DET_DEVICE':'cpu'})):
             self.assertEqual(worker.classify(['python','-u',str(self.script),*args],env,self.cfg),'cpu')
         self.assertEqual(worker.classify(['python',str(self.script),'--cpu-jobs','0'],{},self.cfg),'gpu')
 
