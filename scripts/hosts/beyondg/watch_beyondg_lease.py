@@ -47,9 +47,13 @@ def read_env(path):
     return result
 
 
-def load_config(profile=None, path=None):
+def config_path(profile=None, path=None):
     profile = profile or os.environ.get("BEYONDG_PROFILE") or getpass.getuser()
-    path = Path(path) if path else REPO / "config" / f"{profile}.json"
+    return Path(path).resolve() if path else REPO / "config" / f"{profile}.json"
+
+
+def load_config(profile=None, path=None):
+    path = config_path(profile, path)
     cfg = json.loads(path.read_text())
     # Expand only the repository placeholder; never interpret shell expressions.
     cfg = json.loads(json.dumps(cfg).replace("${REPO}", str(REPO)))
@@ -60,8 +64,27 @@ def load_config(profile=None, path=None):
         raise ValueError("Configure an explicit portal server ID")
     for mode in ("cpu", "gpu"):
         job = cfg["worker"][mode]
-        if not isinstance(job["command"], list) or not job["command"]:
+        if (not isinstance(job["command"], list) or not job["command"]
+                or not all(isinstance(x, str) and x for x in job["command"])):
             raise ValueError(f"{mode}.command must be a nonempty argv list")
+        for key in ("cwd", "log"):
+            if not isinstance(job.get(key), str) or not job[key]:
+                raise ValueError(f"Missing {mode}.{key}")
+        if not isinstance(job.get("env", {}), dict):
+            raise ValueError(f"{mode}.env must be an object")
+        patterns = job.get("queue_patterns")
+        if not isinstance(patterns, list) or not patterns or not all(
+                isinstance(x, str) and x for x in patterns):
+            raise ValueError(f"Missing {mode}.queue_patterns")
+    patterns = cfg["worker"].get("process_patterns")
+    if not isinstance(patterns, list) or not patterns or not all(
+            isinstance(x, str) and x for x in patterns):
+        raise ValueError("Missing process_patterns")
+    if not isinstance(cfg["worker"].get("state_dir"), str) or not cfg["worker"]["state_dir"]:
+        raise ValueError("Missing worker.state_dir")
+    ignored = cfg["worker"].get("ignore_patterns", [])
+    if not isinstance(ignored, list) or not all(isinstance(x, str) and x for x in ignored):
+        raise ValueError("ignore_patterns must be a list of script paths/patterns")
     return cfg
 
 
@@ -210,9 +233,15 @@ class Workers:
 class Controller:
     def __init__(self, cfg, portal, workers, state=None, *, clock=time.time):
         self.cfg, self.portal, self.workers = cfg, portal, workers
-        self.state = dict(state or {})
+        prior = dict(state or {})
+        # Preserve recovery evidence, not obsolete health readings from legacy
+        # watchers (gpu_usage/gpu_queue_alive/etc. are never refreshed here).
+        keys = {"gpu_seen", "allocation_token", "portal_state", "remaining_h",
+                "loss_confirmed", "phase", "events", "ts", "ssh_port",
+                "last_request", "last_reload_success"}
+        self.state = {k: v for k, v in prior.items() if k in keys}
         # Honor evidence saved by either legacy watcher during migration.
-        self.state.setdefault("gpu_seen", bool(self.state.get("gpu_held")))
+        self.state.setdefault("gpu_seen", bool(prior.get("gpu_held")))
         self.clock = clock
         self.events = []
 
@@ -233,6 +262,9 @@ class Controller:
 
     def set_phase(self, phase):
         self.state.update(phase=phase, ts=self.clock(), events=list(self.events))
+        if "worker" in self.cfg:
+            self.state["queue_commands"] = {
+                mode: self.cfg["worker"][mode]["command"] for mode in ("cpu", "gpu")}
         return dict(self.state)
 
     def ready_for(self, key, interval):
@@ -342,6 +374,43 @@ class Controller:
         return self.set_phase("gpu_starting")
 
 
+def refresh_controller(controller, cfg):
+    """Apply queue edits without replacing a running experiment or its locks."""
+    old = controller.cfg
+    if cfg == old:
+        return None
+    if (cfg["sid"] != old["sid"] or cfg["ssh"] != old["ssh"]
+            or cfg["worker"]["state_dir"] != old["worker"]["state_dir"]):
+        return "config_reload_requires_restart:sid_ssh_or_state_dir"
+
+    def jobs(value):
+        return [(value["worker"][mode]["command"], value["worker"][mode]["cwd"],
+                 value["worker"][mode].get("env", {})) for mode in ("cpu", "gpu")]
+
+    if jobs(cfg) != jobs(old):
+        # Inspect using the OLD patterns, including previously tracked orphaned
+        # children. Never hide a live old queue by adopting new patterns first.
+        local = controller.workers.local()
+        if not local.get("ok"):
+            return "config_reload_deferred:local_unknown"
+        if local.get("cpu") or local.get("gpu"):
+            return "config_reload_deferred:active_queue"
+        try:
+            box = controller.portal.status()
+        except PortalError:
+            return "config_reload_deferred:portal_unknown"
+        if box["state"] == "running":
+            box["allocation_token"] = controller.state.get("allocation_token", "unknown")
+            remote = controller.workers.remote(box)
+            if not remote.get("ok"):
+                return "config_reload_deferred:remote_unknown"
+            if remote.get("cpu") or remote.get("gpu"):
+                return "config_reload_deferred:active_queue"
+    workers, portal = Workers(cfg), Portal(cfg)
+    controller.cfg, controller.workers, controller.portal = cfg, workers, portal
+    return "config_reloaded"
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=("ext_csh", "ext_csv"))
@@ -351,7 +420,8 @@ def main(argv=None):
     parser.add_argument("--interval", type=float, default=30)
     parser.add_argument("--print-state-dir", action="store_true")
     args = parser.parse_args(argv)
-    cfg = load_config(args.profile, args.config)
+    path = config_path(args.profile, args.config)
+    cfg = load_config(path=path)
     directory = Path(cfg["worker"]["state_dir"])
     if args.print_state_dir:
         print(directory)
@@ -377,11 +447,19 @@ def main(argv=None):
         pid_path.write_text(str(os.getpid()) + "\n")
     try:
         while running:
+            reload_event = None
+            try:
+                reload_event = refresh_controller(controller, load_config(path=path))
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                reload_event = f"config_reload_failed:{error.__class__.__name__}"
             try:
                 result = controller.tick(apply=args.apply)
             except Exception as error:
                 controller.event(f"tick_error:{error.__class__.__name__}:{error}")
                 result = controller.set_phase("error")
+            if reload_event:
+                controller.events.insert(0, reload_event)
+                result = controller.set_phase(controller.state["phase"])
             # Observations cannot replace authoritative state of an apply run.
             if args.apply:
                 queue_worker.atomic_json(state_path, result)

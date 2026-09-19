@@ -145,6 +145,17 @@ def snapshot(cfg, record):
     while pid in procs and pid not in excluded:
         excluded.add(pid)
         pid = procs[pid]["ppid"]
+    # Long-lived result-sync helpers are not experiment workers. Exclude their
+    # descendants as well, even if an earlier snapshot tracked those PIDs.
+    auxiliary = {pid for pid, proc in procs.items()
+                 if (script := script_argument(proc["argv"])) is not None
+                 and any(fnmatch.fnmatch(script, p) for p in cfg.get("ignore_patterns", []))}
+    while True:
+        children = {pid for pid, proc in procs.items() if proc["ppid"] in auxiliary}
+        if children <= auxiliary:
+            break
+        auxiliary.update(children)
+    excluded.update(auxiliary)
     groups = {"cpu": set(), "gpu": set()}
     for pid, proc in procs.items():
         if pid in excluded:

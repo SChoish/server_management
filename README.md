@@ -21,10 +21,53 @@
 
 | 프로필 | 포털 서버 ID | 기존 큐 |
 | --- | --- | --- |
-| `ext_csh` | `dgx-h200-1` | `/home/ext_csh/logs/iql_amo_qweight/run_queue_iql_amo_qweight_loco9_{cpu,gpu}.sh` |
+| `ext_csh` | `dgx-h200-1` | `/home/ext_csh/MPI_sweep/logs/iql_gauss_fr_s0/run_queue_{cpu,gpu}.sh` |
 | `ext_csv` | `dgx-h200-2` | FQL JAX loco9 T-init-5, alpha LR 3e-4 / 1e-3 / 2e-3, seeds 0–3 |
 
 설정은 `config/ext_csh.json`, `config/ext_csv.json`입니다. 다른 실험으로 바꾸면 `worker.cpu/gpu.command`, `cwd`, `queue_patterns`, `process_patterns`를 함께 변경합니다. 명령은 셸 문자열 대신 argv 배열입니다. CPU와 GPU 큐는 **같은 체크포인트·결과 디렉터리**를 사용해야 합니다.
+
+## 새 큐 등록과 설정 자동 반영
+
+워처는 매 확인 주기(기본 30초)에 시작할 때 지정한 설정 파일을 다시 읽습니다.
+새 큐는 아래 명령으로 등록합니다. 실행 파일 경로와 감시 패턴을 한 번에,
+원자적으로 갱신하며, 실제 CPU/GPU 실행은 호스트 워처가 담당합니다.
+이 명령은 새 큐의 실행 진입점으로 사용하세요. 임의의 `nohup bash ...` 실행만으로
+CPU 대응 큐나 프로젝트를 추측하여 등록하지는 않습니다.
+
+```bash
+python3 ~/server_management/scripts/hosts/beyondg/register_queue.py \
+  --config ~/server_management/config/ext_csh.json \
+  --cpu-queue /home/ext_csh/MPI_sweep/logs/iql_gauss_fr_s0/run_queue_cpu.sh \
+  --gpu-queue /home/ext_csh/MPI_sweep/logs/iql_gauss_fr_s0/run_queue_gpu.sh \
+  --cwd /home/ext_csh/MPI_sweep \
+  --process train_iql_mpi.py launch_mpi_sweep.py
+```
+
+다른 실험을 등록할 때는 CPU/GPU 큐, 작업 디렉터리, 트레이너·런처 경로를 지정합니다.
+환경 설정은 큐 스크립트 안에 둡니다. 등록은 이전 큐의 `env` override를 제거합니다.
+현재 실험이 끝나기 전에 여러 번 등록하면 마지막에 등록한 큐가 다음 실행 대상입니다.
+
+- **같은 큐의 감시 패턴 수정:** 실행 중에도 다음 주기에 반영됩니다.
+- **다른 큐로 전환:** 이전 큐·자식 프로세스가 남아 있으면 유지하고
+  `config_reload_deferred:active_queue`를 기록합니다. 모두 종료된 뒤 전환합니다.
+  포털/SSH 상태를 확인할 수 없을 때도 전환을 보류합니다.
+- **잘못된 JSON/설정:** 마지막 정상 설정을 유지하고 `config_reload_failed`를 기록합니다.
+- **서버 ID, SSH 설정, state_dir 변경:** `config_reload_requires_restart`를 기록하며
+  호스트 워처를 재시작해야 합니다. 큐 변경에는 재시작이 필요하지 않습니다.
+
+`lease.json`의 `queue_commands`가 워처가 실제 사용 중인 CPU/GPU 명령입니다.
+이전 워처의 `gpu_usage`, `gpu_queue_alive`처럼 갱신되지 않는 필드는 제거됩니다.
+`worker.ignore_patterns`에 등록한 결과 동기화 스크립트와 그 자식은 학습 작업으로
+세지 않습니다. ext_csh의 IQL 결과 갱신 루프는 큐 전환을 막거나 함께 종료되지 않습니다.
+
+이 기능을 처음 설치할 때만 호스트에서 코드를 업데이트하고 재시작합니다.
+컨테이너에서 등록하려면 호스트와 같은 설정 파일이 마운트되어 있어야 합니다.
+
+```bash
+cd ~/server_management
+git pull --ff-only origin main
+python3 scripts/hosts/beyondg/restart_watchers.py --config config/ext_csh.json
+```
 
 필요 조건: Linux, Python 3.10+, OpenSSH, `flock`. 포털/감시 코드는 Python 표준 라이브러리만 사용합니다. 실험의 Python 환경·데이터셋은 기존 서버 환경을 사용합니다. 감시기는 GPU 컨테이너 바깥의 호스트에서 실행합니다.
 

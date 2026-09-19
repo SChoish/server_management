@@ -16,9 +16,13 @@
   "worker": {
     "state_dir": "/home/ext_csh/MPI_sweep/logs/beyondg",
     "start_retry_s": 30,
+    "ignore_patterns": [
+      "/home/ext_csh/MPI_sweep/scripts/run_iql_gauss_fr_periodic.sh"
+    ],
     "process_patterns": [
       "*/train_iql_mpi.py",
-      "train_iql_mpi.py"
+      "train_iql_mpi.py",
+      "/home/ext_csh/MPI_sweep/launch_mpi_sweep.py"
     ],
     "cpu": {
       "command": [
