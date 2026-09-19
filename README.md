@@ -21,7 +21,7 @@
 
 | 프로필 | 포털 서버 ID | 기존 큐 |
 | --- | --- | --- |
-| `ext_csh` | `dgx-h200-1` | `/home/ext_csh/MPI_sweep/logs/mpi_tau40_ext/run_queue_imp_me_k14_s0123_{cpu,gpu}.sh` |
+| `ext_csh` | `dgx-h200-1` | `/home/ext_csh/logs/iql_amo_qweight/run_queue_iql_amo_qweight_loco9_{cpu,gpu}.sh` |
 | `ext_csv` | `dgx-h200-2` | FQL JAX loco9 T-init-5, alpha LR 3e-4 / 1e-3 / 2e-3, seeds 0–3 |
 
 설정은 `config/ext_csh.json`, `config/ext_csv.json`입니다. 다른 실험으로 바꾸면 `worker.cpu/gpu.command`, `cwd`, `queue_patterns`, `process_patterns`를 함께 변경합니다. 명령은 셸 문자열 대신 argv 배열입니다. CPU와 GPU 큐는 **같은 체크포인트·결과 디렉터리**를 사용해야 합니다.

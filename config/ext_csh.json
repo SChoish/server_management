@@ -17,33 +17,31 @@
     "state_dir": "/home/ext_csh/MPI_sweep/logs/beyondg",
     "start_retry_s": 30,
     "process_patterns": [
-      "*/train_td3bc.py",
-      "train_td3bc.py",
-      "*/launch_mpi_sweep.py",
-      "launch_mpi_sweep.py"
+      "*/train_iql_mpi.py",
+      "train_iql_mpi.py"
     ],
     "cpu": {
       "command": [
         "bash",
-        "/home/ext_csh/MPI_sweep/logs/mpi_tau40_ext/run_queue_imp_me_k14_s0123_cpu.sh"
+        "/home/ext_csh/MPI_sweep/logs/iql_gauss_fr_s0/run_queue_cpu.sh"
       ],
       "cwd": "/home/ext_csh/MPI_sweep",
       "log": "/home/ext_csh/MPI_sweep/logs/beyondg/queue_cpu.log",
       "queue_patterns": [
-        "*/run_queue_imp_me_k14_s0123_cpu.sh",
-        "run_queue_imp_me_k14_s0123_cpu.sh"
+        "*/iql_gauss_fr_s0/run_queue_cpu.sh",
+        "iql_gauss_fr_s0/run_queue_cpu.sh"
       ]
     },
     "gpu": {
       "command": [
         "bash",
-        "/home/ext_csh/MPI_sweep/logs/mpi_tau40_ext/run_queue_imp_me_k14_s0123_gpu.sh"
+        "/home/ext_csh/MPI_sweep/logs/iql_gauss_fr_s0/run_queue_gpu.sh"
       ],
       "cwd": "/home/ext_csh/MPI_sweep",
       "log": "/home/ext_csh/MPI_sweep/logs/beyondg/queue_gpu.log",
       "queue_patterns": [
-        "*/run_queue_imp_me_k14_s0123_gpu.sh",
-        "run_queue_imp_me_k14_s0123_gpu.sh"
+        "*/iql_gauss_fr_s0/run_queue_gpu.sh",
+        "iql_gauss_fr_s0/run_queue_gpu.sh"
       ]
     }
   }
