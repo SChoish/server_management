@@ -1,0 +1,43 @@
+---
+description: Register experiment queues with the host watcher and verify the effective queue whenever launching or changing a queue.
+alwaysApply: true
+---
+
+# 실험 큐와 서버 워처 연동
+
+이 규칙은 큐 생성·변경·실행 작업에 적용한다. 관계없는 작업에서는 큐나 워처를 조작하지 않는다.
+
+## 큐를 만들거나 실행할 때
+
+1. 대상 계정, 프로젝트, 호스트와 GPU 컨테이너를 구분한다. 실행 중인 호스트 워처의 `--config` 또는 `--profile`을 확인하고 **실제로 읽는 설정 파일**을 사용한다. `ext_csh`와 `ext_csv`의 설정을 서로 덮어쓰지 않는다.
+2. CPU/GPU 큐 스크립트 한 쌍을 준비한다. 두 스크립트는 같은 실험 조건, 체크포인트·결과 경로와 재개 규약을 사용해야 한다. Python/Conda와 CPU/GPU 환경 설정은 각 큐 스크립트에 둔다. 호스트와 컨테이너에서 필요한 경로가 접근 가능한지 확인한다.
+3. 새 큐의 실행 진입점은 이 저장소의 `scripts/hosts/beyondg/register_queue.py`를 사용한다. `--config`, `--cpu-queue`, `--gpu-queue`, `--cwd`, `--process`를 모두 실제 경로에 맞춰 지정한다. `--process`에는 트레이너뿐 아니라 분리 실행되는 런처도 포함한다.
+4. 사용자가 큐 실행을 요청했으면 등록과 확인까지 수행한다. 코드 작성만 요청했으면 등록 명령 또는 실행 래퍼를 함께 준비한다. 등록은 실행 중인 워처가 새 작업을 시작하게 할 수 있으므로 코드 작성만으로 런타임 설정을 바꾸지 않는다.
+5. 일반적인 큐 실행을 직접 `nohup bash ...`로 끝내지 않는다. 등록 뒤 CPU/GPU 큐를 별도로 띄우지 않고 호스트 워처가 실행하도록 한다. 등록 실패를 무시하거나 수동 실행으로 우회하지 않는다.
+
+현재 ext_csh IQL 큐 등록 예시이며, 다른 큐에는 경로와 프로세스를 교체한다:
+
+```bash
+python3 /home/ext_csh/server_management/scripts/hosts/beyondg/register_queue.py \
+  --config /home/ext_csh/server_management/config/ext_csh.json \
+  --cpu-queue /home/ext_csh/MPI_sweep/logs/iql_gauss_fr_s0/run_queue_cpu.sh \
+  --gpu-queue /home/ext_csh/MPI_sweep/logs/iql_gauss_fr_s0/run_queue_gpu.sh \
+  --cwd /home/ext_csh/MPI_sweep \
+  --process train_iql_mpi.py launch_mpi_sweep.py
+```
+
+## 자동 반영과 확인
+
+- 워처는 **GPU 컨테이너 바깥 호스트**에서 한 번만 실행한다. 컨테이너에서 등록할 때는 호스트가 읽는 동일한 설정 파일이 공유되는지 먼저 확인한다. 기본은 호스트에서 등록한다.
+- 실행 중인 워처는 설정을 다음 주기(기본 30초)에 다시 읽는다. 새 코드 최초 설치, 워처 중단, 또는 `sid`·`ssh`·`worker.state_dir` 변경 때만 필요한 호스트 시작/재시작을 수행한다. 큐 등록마다 `restart_watchers.py`를 호출하지 않는다.
+- 이전 큐나 자식 프로세스가 살아 있으면 새 큐 전환은 보류된다. `config_reload_deferred:active_queue`는 보류 상태이며, 이를 없애려고 학습을 강제 종료하거나 워처를 재시작하지 않는다. 포털/SSH 확인 실패 때도 전환 보류 사유를 보고한다.
+- 등록은 작업 목록에 추가하는 기능이 아니다. 이전 큐가 끝나기 전에 여러 번 등록하면 마지막 등록만 다음 대상이 된다. 여러 실험을 순서대로 돌릴 때는 한 큐 스크립트 안에 순서를 구성한다.
+- 설정의 `worker.state_dir` 아래 최신 `lease.json`과 `watcher.log`에서 갱신 시각, `queue_commands`, `phase`, `events`를 확인한다. 등록 성공 출력만으로 실행 성공을 주장하지 않는다. `config_reloaded`는 일회성 이벤트일 수 있으므로 현재 `queue_commands`를 함께 확인한다.
+- 실행 중이라고 보고하려면 해당 큐의 실제 프로세스와 새 학습 로그도 확인한다. 오래된 `gpu_usage`·`gpu_queue_alive` 값만으로 판단하지 않는다. 결과 동기화/캔버스 루프는 학습 작업으로 등록하지 않는다.
+- 원격 실행 권한이나 접속 수단이 없으면 실제 경로를 채운 터미널 명령을 제공하고 미확인 상태를 명시한다. 실행·등록·검증했다고 추정하지 않는다. 서버용 명령은 `rg`가 없어도 실행되도록 작성한다.
+
+## 저장소 경계
+
+- 워처 코드와 서버 설정은 `SChoish/server_management`에서 관리한다. 실험 큐와 학습 코드는 해당 실험 저장소에서 관리하며, MPI_sweep 안의 옛 워처 사본을 고쳐 해결하지 않는다.
+- 실행 시의 큐 등록과 Git 발행은 별개다. 런타임 등록을 이유로 자동 커밋·푸시를 추가하지 않는다. 코드 발행 시 대상 원격과 변경 파일을 확인하고 자격증명·데이터·체크포인트를 포함하지 않는다.
+- 상세 동작은 이 저장소의 `README.md`, `register_queue.py`, `watch_beyondg_lease.py`를 확인한다. 이 규칙의 MPI_sweep 연동 부분을 변경할 때는 해당 저장소의 동명 룰과도 일치시킨다.
