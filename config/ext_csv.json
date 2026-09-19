@@ -18,32 +18,30 @@
     "state_dir": "/home/ext_csv/MPI_sweep/logs/beyondg",
     "start_retry_s": 30,
     "process_patterns": [
-      "*/AMO-fql/train.py",
-      "*/launch_fql_amo_jax_loco9_tinit5_alrgrid.py",
-      "launch_fql_amo_jax_loco9_tinit5_alrgrid.py"
+      "*/train_iql_mpi.py",
+      "*/launch_mpi_sweep.py",
+      "*/run_queue_iql_qbc_det_w2_seed0.sh"
     ],
     "cpu": {
       "command": [
         "bash",
-        "${REPO}/scripts/hosts/beyondg/run_queue_amo_fql_jax_loco9_cpu.sh"
+        "${REPO}/scripts/hosts/beyondg/run_queue_iql_qbc_det_w2_seed0_cpu.sh"
       ],
       "cwd": "/home/ext_csv/MPI_sweep",
       "log": "/home/ext_csv/MPI_sweep/logs/beyondg/queue_cpu.log",
       "queue_patterns": [
-        "*/run_queue_amo_fql_jax_loco9_cpu.sh",
-        "run_queue_amo_fql_jax_loco9_cpu.sh"
+        "*/run_queue_iql_qbc_det_w2_seed0_cpu.sh"
       ]
     },
     "gpu": {
       "command": [
         "bash",
-        "${REPO}/scripts/hosts/beyondg/run_queue_amo_fql_jax_loco9_gpu.sh"
+        "${REPO}/scripts/hosts/beyondg/run_queue_iql_qbc_det_w2_seed0_gpu.sh"
       ],
       "cwd": "/home/ext_csv/MPI_sweep",
       "log": "/home/ext_csv/MPI_sweep/logs/beyondg/queue_gpu.log",
       "queue_patterns": [
-        "*/run_queue_amo_fql_jax_loco9_gpu.sh",
-        "run_queue_amo_fql_jax_loco9_gpu.sh"
+        "*/run_queue_iql_qbc_det_w2_seed0_gpu.sh"
       ]
     }
   }

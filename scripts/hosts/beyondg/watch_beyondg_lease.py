@@ -74,8 +74,10 @@ def parse_status(payload, sid):
     if state not in KNOWN_STATES:
         raise PortalError(f"unknown_state:{state}")
     remaining = row.get("lease_hours_left")
+    cooldown = row.get("cooldown_min_left")
     try:
         remaining = float(remaining) if remaining is not None else None
+        cooldown = float(cooldown) if cooldown is not None else 0.0
         port = int(row["ssh_port"]) if row.get("ssh_port") else None
     except (ValueError, TypeError) as error:
         raise PortalError("invalid_status_fields") from error
@@ -83,8 +85,11 @@ def parse_status(payload, sid):
         raise PortalError("invalid_ssh_port")
     if remaining is not None and not math.isfinite(remaining):
         raise PortalError("invalid_remaining_time")
+    if not math.isfinite(cooldown) or cooldown < 0:
+        cooldown = 0.0
     return {"sid": sid, "state": state, "remaining_h": remaining,
-            "host": row.get("host"), "ssh_port": port}
+            "host": row.get("host"), "ssh_port": port,
+            "cooldown_min_left": cooldown}
 
 
 class Portal:
@@ -229,6 +234,7 @@ class Controller:
         self.state["portal_state"] = box["state"]
         self.state["remaining_h"] = box["remaining_h"]
         self.state["ssh_port"] = box["ssh_port"]
+        self.state["cooldown_min_left"] = box.get("cooldown_min_left") or 0.0
         box["allocation_token"] = self.state.get("allocation_token", "unknown")
 
     def set_phase(self, phase):
@@ -246,17 +252,27 @@ class Controller:
         except PortalError as error:
             self.event(f"portal_unknown:{error}")
             return self.set_phase("wait_portal")
+        prev_state = self.state.get("portal_state")
+        prev_cooldown = float(self.state.get("cooldown_min_left") or 0)
         self.observe(box)
         if not apply:
             return self.set_phase("observe_" + box["state"])
 
         # Renew in place: a failed HTTP request must not kill a healthy job.
+        retry_s = self.cfg.get("request_retry_s", 60)
         due = (box["state"] == "running" and box["remaining_h"] is not None
                and box["remaining_h"] <= self.cfg.get("reload_remaining_h", 6.5))
         renew = (due and self.ready_for("last_reload_success", 30 * 60)
-                 and self.ready_for("last_request", self.cfg.get("request_retry_s", 60)))
+                 and self.ready_for("last_request", retry_s))
+        cooldown = float(box.get("cooldown_min_left") or 0)
+        # GPU loss: POST /start on the same tick, even if a reload just ran.
+        # If the portal is in cooldown, do not spam; the instant
+        # cooldown_min_left hits 0, POST again without waiting request_retry_s.
+        just_lost = prev_state == "running" and box["state"] in RELEASED
+        cooldown_cleared = cooldown <= 0 and prev_cooldown > 0
         acquire = (box["state"] in RELEASED
-                   and self.ready_for("last_request", self.cfg.get("request_retry_s", 60)))
+                   and (just_lost or cooldown_cleared
+                        or self.ready_for("last_request", retry_s)))
         if renew or acquire:
             self.state["last_request"] = self.clock()
             accepted = False

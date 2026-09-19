@@ -68,7 +68,8 @@ def classify(argv, env, cfg):
         cpu_jobs = False
     if (device.startswith("cpu") or cpu_jobs or env.get("JAX_PLATFORMS") == "cpu"
             or env.get("JAX_PLATFORM_NAME") == "cpu"
-            or env.get("CUDA_VISIBLE_DEVICES") == ""):
+            or env.get("CUDA_VISIBLE_DEVICES") == ""
+            or env.get("IQL_QBC_DET_DEVICE") == "cpu"):
         return "cpu"
     return "gpu"
 

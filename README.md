@@ -9,7 +9,7 @@
 | 처음 포털 대기열에 있음 | 할당될 때까지 확인. CPU는 새로 시작하지 않음 |
 | GPU 할당 + 도커 SSH 정상 + GPU 확인 | 기존 GPU 큐 재개 |
 | 포털 잔여 시간 ≤ 6.5시간 | 학습을 먼저 종료하지 않고 `/container/<설정한 sid>/start`로 리로드 |
-| 사용하던 GPU가 회수됨 | CPU 큐 재개. 포털이 stopped이면 GPU 요청, queued이면 그대로 대기 |
+| 사용하던 GPU가 회수됨 | 같은 tick에 `/start`로 대기열 요청. 포털 쿨다운(`cooldown_min_left`)이 0이 되는 순간 다시 요청. queued이면 재제출하지 않음. CPU 큐 재개 |
 | CPU 실행 중 GPU 재할당 | 도커/GPU 확인 → CPU 런처·학습 프로세스 SIGTERM → 모두 종료 확인 → GPU 큐 재개 |
 | 포털 장애 또는 SSH 실패만 발생 | 회수로 단정하지 않음. 이미 실행 중인 작업을 유지하며 재확인 |
 
@@ -22,7 +22,7 @@
 | 프로필 | 포털 서버 ID | 기존 큐 |
 | --- | --- | --- |
 | `ext_csh` | `dgx-h200-1` | `/home/ext_csh/MPI_sweep/logs/mpi_tau40_ext/run_queue_imp_me_k14_s0123_{cpu,gpu}.sh` |
-| `ext_csv` | `dgx-h200-2` | FQL JAX loco9 T-init-5, alpha LR 3e-4 / 1e-3 / 2e-3, seeds 0–3 |
+| `ext_csv` | `dgx-h200-2` | FQL JAX antmaze6 T-init-5 (priority; loco9 paused), alpha LR 3e-4 / 1e-3 / 2e-3, seeds 0–3 |
 
 설정은 `config/ext_csh.json`, `config/ext_csv.json`입니다. 다른 실험으로 바꾸면 `worker.cpu/gpu.command`, `cwd`, `queue_patterns`, `process_patterns`를 함께 변경합니다. 명령은 셸 문자열 대신 argv 배열입니다. CPU와 GPU 큐는 **같은 체크포인트·결과 디렉터리**를 사용해야 합니다.
 

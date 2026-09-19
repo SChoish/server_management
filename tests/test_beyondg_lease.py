@@ -21,9 +21,10 @@ from watch_beyondg_lease import (
 )
 
 
-def box(state='running', remaining=9.0):
+def box(state='running', remaining=9.0, cooldown=0.0):
     return {'sid':'dgx-h200-2', 'state':state, 'remaining_h':remaining,
-            'host':'127.0.0.1', 'ssh_port':23021 if state == 'running' else None}
+            'host':'127.0.0.1', 'ssh_port':23021 if state == 'running' else None,
+            'cooldown_min_left': cooldown}
 
 
 class FakePortal:
@@ -154,6 +155,31 @@ class Transitions(unittest.TestCase):
         self.assertEqual(self.portal.posts, 1, 'Do not resubmit an existing queue entry')
         self.assertTrue(self.workers.cpu)
 
+    def test_cooldown_clear_requests_immediately(self):
+        self.tick()
+        self.workers.gpu = []
+        self.control.state['last_request'] = self.now - 10
+        self.portal.current = box('stopped', None, cooldown=10)
+        self.portal.post_error = 'start_rejected'
+        self.tick()
+        self.assertEqual(self.portal.posts, 1)
+        self.now += 10
+        self.tick()
+        self.assertEqual(self.portal.posts, 1, 'Do not spam Start during cooldown')
+        self.portal.post_error = None
+        self.portal.current = box('stopped', None, cooldown=0)
+        self.portal.after_post = box('queued', None)
+        result = self.tick()
+        self.assertEqual(self.portal.posts, 2)
+        self.assertEqual(result['portal_state'], 'queued')
+        self.assertIn('gpu_requested', result['events'])
+
+    def test_parse_cooldown_min_left(self):
+        parsed = parse_status(
+            {'dgx-h200-2': {'state': 'stopped', 'cooldown_min_left': 7}},
+            'dgx-h200-2')
+        self.assertEqual(parsed['cooldown_min_left'], 7.0)
+
     def test_cpu_shutdown_must_finish_before_gpu_start(self):
         self.control.state.update(gpu_seen=True, loss_confirmed=True)
         self.workers.cpu = ['cpu:1']
@@ -241,7 +267,9 @@ class PortalTests(unittest.TestCase):
         rows = {'dgx-h200-1':{'state':'running','ssh_port':23023},
                 'dgx-h200-2':{'state':'queued'}}
         for payload in (rows, dict(reversed(list(rows.items())))):
-            self.assertEqual(parse_status(payload, 'dgx-h200-2')['state'], 'queued')
+            parsed = parse_status(payload, 'dgx-h200-2')
+            self.assertEqual(parsed['state'], 'queued')
+            self.assertEqual(parsed['cooldown_min_left'], 0.0)
 
     def test_missing_target_or_unknown_state_is_not_loss(self):
         for payload in ({'error':'unauthorized'}, {}, {'dgx-h200-2':{'state':'unknown'}},
@@ -304,7 +332,8 @@ class WorkerTests(unittest.TestCase):
     def test_cpu_flag_forms_and_environment(self):
         for args, env in ((['--device','cpu'],{}), (['--device=cpu'],{}),
                           (['--cpu-jobs','2'],{}), ([],{'JAX_PLATFORMS':'cpu'}),
-                          ([],{'CUDA_VISIBLE_DEVICES':''})):
+                          ([],{'CUDA_VISIBLE_DEVICES':''}),
+                          ([],{'IQL_QBC_DET_DEVICE':'cpu'})):
             self.assertEqual(worker.classify(['python','-u',str(self.script),*args],env,self.cfg),'cpu')
         self.assertEqual(worker.classify(['python',str(self.script),'--cpu-jobs','0'],{},self.cfg),'gpu')
 
